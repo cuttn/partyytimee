@@ -41,6 +41,7 @@ python/pyvenv.cfg
 .firebase/
 firebase-debug.log*
 firebase-debug.*.log*
+firebase-tools-instant-win.exe
 
 # Environment variables
 .env
@@ -68,6 +69,5 @@ Thumbs.db
 # Logs
 *.log
 logs/
-
 # Firebase service account keys (keep your actual key file)
 # houseparty-26abf-firebase-adminsdk-fbsvc-529fbe0b54.json
