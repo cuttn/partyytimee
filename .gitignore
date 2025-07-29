@@ -69,5 +69,5 @@ Thumbs.db
 # Logs
 *.log
 logs/
-# Firebase service account keys (keep your actual key file)
-# houseparty-26abf-firebase-adminsdk-fbsvc-529fbe0b54.json
+# Firebase service account keys
+*.json
