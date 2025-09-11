@@ -1,25 +1,24 @@
 from sqlmodel import Field, SQLModel, create_engine
 from pydantic import EmailStr, BaseModel
 from datetime import datetime
+import datetime as dt
 from typing import List, Optional
 import json
 
 class User(SQLModel, table=True):
     id : int | None = Field(default=None, primary_key=True)
     username : str
-    display_name : str
     email : EmailStr | None
     pfpURL : str | None
     firebase_uid: str | None = Field(default=None, index=True, unique=True, description="Firebase UID")
     email_verified: bool = Field(default=False, description="Is the email verified?")
     phone: str | None = Field(default=None, description="User's phone number")
     custom_claims: str | None = Field(default=None, description="Custom claims as JSON string")
-    first_name: str
-    last_name: str
     isHost: bool | None = Field(default=False)
     bio: str | None = Field(default=None, description="User's bio")
-    created_at: datetime | None = Field(default_factory=lambda: datetime.now(datetime.UTC))
-    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(datetime.UTC))
+    saved_party_ids: str = Field(default="[]", description="JSON array of saved party IDs")
+    created_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
+    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
 
 class Party(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -41,18 +40,15 @@ class Party(SQLModel, table=True):
     start_time: datetime | None = Field(default=None, description="Party start time")
     end_time: datetime | None = Field(default=None, description="Party end time")
     max_attendees: int | None = Field(default=None, description="Maximum number of attendees")
-    hashtags: str | None = Field(default=None, description="Comma-separated hashtags")
+    hashtags: str | None = Field(default=None, description="hashtags")
     
     # Timestamps
-    created_at: datetime | None = Field(default_factory=lambda: datetime.now(datetime.UTC))
-    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(datetime.UTC))
+    created_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
+    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
 
 class newUser(BaseModel):
     email: EmailStr
     username : str
-    display_name: str
-    first_name: str
-    last_name: str
     phone: str = None
     bio: str = None
 
@@ -85,3 +81,41 @@ def remove_attendee(party: Party, user_id: int) -> bool:
         set_attendee_ids(party, attendee_ids)
         return True
     return False
+
+# Helper functions for User saved parties
+def get_saved_party_ids(user: User) -> List[int]:
+    """Get list of saved party IDs from JSON string"""
+    try:
+        return json.loads(user.saved_party_ids)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+def set_saved_party_ids(user: User, party_ids: List[int]) -> None:
+    """Set saved party IDs as JSON string"""
+    user.saved_party_ids = json.dumps(party_ids)
+
+def add_saved_party(user: User, party_id: int) -> bool:
+    """Add a party to user's saved parties"""
+    saved_ids = get_saved_party_ids(user)
+    if party_id not in saved_ids:
+        saved_ids.append(party_id)
+        set_saved_party_ids(user, saved_ids)
+        return True
+    return False
+
+def remove_saved_party(user: User, party_id: int) -> bool:
+    """Remove a party from user's saved parties"""
+    saved_ids = get_saved_party_ids(user)
+    if party_id in saved_ids:
+        saved_ids.remove(party_id)
+        set_saved_party_ids(user, saved_ids)
+        return True
+    return False
+
+class Host(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", unique=True)
+    card_on_file: Optional[str] = None
+    parties_thrown: int = 0
+    # ... other host fields ...
+    created_at: datetime = Field(default_factory=lambda: datetime.now(dt.UTC))
