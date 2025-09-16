@@ -13,10 +13,10 @@ class User(SQLModel, table=True):
     firebase_uid: str | None = Field(default=None, index=True, unique=True, description="Firebase UID")
     email_verified: bool = Field(default=False, description="Is the email verified?")
     phone: str | None = Field(default=None, description="User's phone number")
-    custom_claims: str | None = Field(default=None, description="Custom claims as JSON string")
     isHost: bool | None = Field(default=False)
     bio: str | None = Field(default=None, description="User's bio")
     saved_party_ids: str = Field(default="[]", description="JSON array of saved party IDs")
+    current_party_id: int | None = Field(default=None, description="ID of party user is currently at")
     created_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
     updated_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))
 
@@ -41,6 +41,7 @@ class Party(SQLModel, table=True):
     end_time: datetime | None = Field(default=None, description="Party end time")
     max_attendees: int | None = Field(default=None, description="Maximum number of attendees")
     hashtags: str | None = Field(default=None, description="hashtags")
+    media_url: str | None = Field(default=None, description="URL for party media/images")
     
     # Timestamps
     created_at: datetime | None = Field(default_factory=lambda: datetime.now(dt.UTC))

@@ -6,10 +6,13 @@ from sqlmodel import Session, select, or_, and_
 import models
 from models import get_attendee_ids, add_attendee, remove_attendee, get_saved_party_ids, add_saved_party, remove_saved_party, Host
 import IDVerification
+from sqlalchemy import case
 from http import HTTPStatus
 from datetime import datetime
 from typing import List
 from pydantic import BaseModel
+from sqlmodel import Field
+import datetime as dt
 
 SQLModel.metadata.create_all(engine)
 
@@ -74,9 +77,11 @@ class CreatePartyRequest(BaseModel):
     end_time: datetime | None = None
     max_attendees: int | None = None
     hashtags: str | None = None
+    media_url: str | None = None
 
 class PartyFilters(BaseModel):
-    hashtags: list[str] | None = None
+    sort_by: str | None = None
+    hashtags: str | None = None
     location_radius: dict | None = None  # {"lat": 40.7128, "lng": -74.0060, "radius_km": 10}
     date_range: dict | None = None  # {"start": "2024-01-01", "end": "2024-12-31"}
     host_id: int | None = None
@@ -105,7 +110,8 @@ async def create_party(party_data: CreatePartyRequest, token_data: dict = Depend
             start_time=party_data.start_time,
             end_time=party_data.end_time,
             max_attendees=party_data.max_attendees,
-            hashtags=party_data.hashtags
+            hashtags=party_data.hashtags,
+            media_url=party_data.media_url
         )
         
         sesh.add(new_party)
@@ -122,18 +128,18 @@ async def join_party(party_id: int, token_data: dict = Depends(IDVerification.ve
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Check if user is already at a party
+        if user.current_party_id:
+            raise HTTPException(status_code=400, detail="Already at a party. Leave current party first.")
+        
         # Get the party
         party = sesh.exec(select(models.Party).where(models.Party.id == party_id)).first()
         if not party:
             raise HTTPException(status_code=404, detail="Party not found")
         
-        # Check if user is already attending
-        attendee_ids = get_attendee_ids(party)
-        if user.id in attendee_ids:
-            raise HTTPException(status_code=400, detail="Already attending this party")
-        
-        # Add user to attendees
+        # Add user to attendees and set current party
         if add_attendee(party, user.id):
+            user.current_party_id = party_id
             sesh.commit()
             return {"message": "Successfully joined party", "id": party_id}
         else:
@@ -152,8 +158,9 @@ async def leave_party(party_id: int, token_data: dict = Depends(IDVerification.v
         if not party:
             raise HTTPException(status_code=404, detail="Party not found")
         
-        # Remove user from attendees
+        # Remove user from attendees and clear current party
         if remove_attendee(party, user.id):
+            user.current_party_id = None
             sesh.commit()
             return {"message": "Successfully left party"}
         else:
@@ -242,19 +249,35 @@ async def filter_parties(
 ):
     with get_db_session() as sesh:
         query = select(models.Party)
-        
-        # Hashtag filtering
+        score_conditions = []
+            # Hashtag filtering
         if filters.hashtags:
-            hashtag_conditions = []
-            for hashtag in filters.hashtags:
-                # Ensure hashtag starts with #
-                if not hashtag.startswith("#"):
-                    hashtag = "#" + hashtag
-                hashtag_conditions.append(models.Party.hashtags.contains(hashtag))
-            if hashtag_conditions:
-                query = query.where(or_(*hashtag_conditions))
-        
-        # Location radius filtering
+            search_words = filters.hashtags.lower().split()
+            search_conditions = []
+            
+            for word in search_words:
+                word_pattern = f"%{word}%"
+                word_condition = or_(
+                    models.Party.name.ilike(word_pattern),
+                    models.Party.description.ilike(word_pattern),
+                    models.Party.hashtags.ilike(word_pattern)
+                )
+
+                search_conditions.append(word_condition)
+                if filters.sort_by == "phrase" and search_conditions:
+                # Add scoring - each field match gets points
+                    score_conditions.extend([
+                        case((models.Party.name.ilike(word_pattern), 3), else_=0),      # Name matches worth 3 points
+                        case((models.Party.description.ilike(word_pattern), 1), else_=0), # Description worth 1 point  
+                        case((models.Party.hashtags.ilike(word_pattern), 2), else_=0)    # Hashtags worth 2 points
+                    ])
+                    total_score = sum(score_conditions) if score_conditions else 0
+                    query = query.order_by(total_score.desc(), models.Party.created_at.desc())
+                    
+            if search_conditions:
+                query = query.where(or_(*search_conditions))
+            
+            # Location radius filtering
         if filters.location_radius:
             lat = filters.location_radius.get("lat")
             lng = filters.location_radius.get("lng")
@@ -274,10 +297,12 @@ async def filter_parties(
         if filters.date_range:
             if filters.date_range.get("start"):
                 start_date = datetime.fromisoformat(filters.date_range["start"].replace('Z', '+00:00'))
-                query = query.where(models.Party.start_time >= start_date)
+                query = query.where(models.Party.start_time <= start_date)
             if filters.date_range.get("end"):
                 end_date = datetime.fromisoformat(filters.date_range["end"].replace('Z', '+00:00'))
-                query = query.where(models.Party.start_time <= end_date)
+                query = query.where(models.Party.end_time >= end_date)
+            if filters.sort_by == "time":
+                query = query.order_by(models.Party.end_time.desc())
         
         # Host filtering
         if filters.host_id:
@@ -321,6 +346,8 @@ async def filter_parties(
                             closeparties.append(party)
                             distances[party.id] = distance
                 parties = closeparties
+                if getattr(filters, "sort_by", None) == "distance":
+                    parties.sort(key=lambda p: distances.get(p.id, float("inf")))
         # Build response
         party_list = []
         for party in parties:
@@ -337,10 +364,9 @@ async def filter_parties(
                 #     "longitude": party.longitude,
                 #     "address": party.address
                 # },
-                "start_time": party.start_time,
-                "end_time": party.end_time,
+                "start_time": party.start_time.isoformat() + "Z",
+                "end_time": party.end_time.isoformat() + "Z",
                 "max_attendees": party.max_attendees,
-                "created_at": party.created_at
             }
             party_list.append(party_data)
         
